@@ -1,6 +1,6 @@
-# vip_parking
+# qb-reservedgarage
 
-A VIP Persistent Parking Slot system for FiveM servers running **QBCore**.
+A Reserved Parking Slot system for FiveM servers running **QBCore**.
 
 Admins assign dedicated parking spots to players. Vehicles park persistently in the world, survive server restarts, and stream in/out based on player proximity — no AdvancedParking dependency required.
 
@@ -34,18 +34,18 @@ Admins assign dedicated parking spots to players. Vehicles park persistently in 
 
 **1. Database**
 
-Run `sql/vip_parking.sql` on your server database before starting the resource.
+Run `sql/qb-reservedgarage.sql` on your server database before starting the resource.
 
 > If upgrading from an earlier version, use the **migration block** at the bottom of the SQL file instead of the `CREATE TABLE` statements.
 
 **2. Resource**
 
-Drop the `vip_parking` folder into your server's `resources` directory.
+Drop the `qb-reservedgarage` folder into your server's `resources` directory.
 
 **3. server.cfg**
 
 ```
-ensure vip_parking
+ensure qb-reservedgarage
 ```
 
 Make sure this loads **after** `qb-core`, `oxmysql`, and `qb-target`.
@@ -57,15 +57,15 @@ Make sure this loads **after** `qb-core`, `oxmysql`, and `qb-target`.
 All options are in `config.lua`.
 
 ```lua
-Config.SpawnRadius            = 50.0   -- Distance at which parked vehicle entity spawns
-Config.StreamInterval         = 5000   -- How often (ms) the server checks for vehicles to spawn
-Config.DespawnInterval        = 5000   -- How often (ms) the server checks for vehicles to despawn
-Config.TargetRadius           = 2.5    -- qb-target interaction zone radius
-Config.SlotInteractDistance   = 5.0    -- Max distance to see Park / Retrieve prompt
-Config.MaxSlotsPerOwner       = 10     -- Maximum slots one player can be assigned
-Config.MaxAccessGrantsPerOwner = 4     -- Maximum access grants one owner can hand out
-Config.AdminGroup             = 'admin' -- QBCore permission group for admin commands
-Config.Debug                  = false  -- Server console debug output
+Config.SpawnRadius             = 50.0    -- Distance at which parked vehicle entity spawns
+Config.StreamInterval          = 5000    -- How often (ms) the server checks for vehicles to spawn
+Config.DespawnInterval         = 5000    -- How often (ms) the server checks for vehicles to despawn
+Config.TargetRadius            = 2.5     -- qb-target interaction zone radius
+Config.SlotInteractDistance    = 5.0     -- Max distance to see Park / Retrieve prompt
+Config.MaxSlotsPerOwner        = 10      -- Maximum slots one player can be assigned
+Config.MaxAccessGrantsPerOwner = 4       -- Maximum access grants one owner can hand out
+Config.AdminGroup              = 'admin' -- QBCore permission group for admin commands
+Config.Debug                   = false   -- Server console debug output
 ```
 
 ---
@@ -78,14 +78,14 @@ Config.Debug                  = false  -- Server console debug output
 
 | Command | Usage | Description |
 |---|---|---|
-| `/createslot` | `/createslot [citizenid]` | Creates a VIP parking slot at the admin's current position and heading, assigned to the given player. Respects `Config.MaxSlotsPerOwner`. |
+| `/createslot` | `/createslot [citizenid]` | Creates a reserved parking slot at the admin's current position and heading, assigned to the given player. Respects `Config.MaxSlotsPerOwner`. |
 | `/removeslot` | `/removeslot [slot_id]` | Permanently removes the slot. Any vehicle parked there is sent to impound. Access grants are only wiped if the owner has no slots remaining. |
 
 ### Player Commands
 
 | Command | Usage | Description |
 |---|---|---|
-| `/addkeypersistent` | `/addkeypersistent [citizenid]` | Grants another player access to **all** of your VIP slots. Covers any slots you receive in the future too. Max 4 grants per owner. |
+| `/addkeypersistent` | `/addkeypersistent [citizenid]` | Grants another player access to **all** of your reserved slots. Covers any slots you receive in the future too. Max 4 grants per owner. |
 | `/removeaccess` | `/removeaccess [citizenid]` | Revokes a player's access across all of your slots. |
 
 ### Interactions (qb-target)
@@ -135,7 +135,7 @@ Both prompts are visible to the slot owner and anyone granted access via `/addke
 
 ## Database Schema
 
-### `vip_parking_slots`
+### `qb_reservedgarage_slots`
 
 | Column | Type | Description |
 |---|---|---|
@@ -146,7 +146,7 @@ Both prompts are visible to the slot owner and anyone granted access via `/addke
 | `vehicle_model` | VARCHAR(50) | Spawn model name |
 | `vehicle_props` | LONGTEXT | Full QBCore vehicle props JSON |
 
-### `vip_vehicle_access`
+### `qb_reservedgarage_access`
 
 | Column | Type | Description |
 |---|---|---|

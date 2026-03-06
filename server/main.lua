@@ -1,5 +1,5 @@
 -- ─────────────────────────────────────────────
--- vip_parking — server/main.lua v3
+-- qb-reservedgarage — server/main.lua v3
 -- Multi-slot support, owner-level access grants.
 -- All vehicle spawning is server-authoritative.
 -- ─────────────────────────────────────────────
@@ -21,7 +21,7 @@ local ParkingState = {}
 
 function DebugPrint(msg)
     if Config.Debug then
-        print('^3[vip_parking]^7 ' .. tostring(msg))
+        print('^3[qb-reservedgarage]^7 ' .. tostring(msg))
     end
 end
 
@@ -103,7 +103,7 @@ local function ClearSlot(slot, removeAccess)
     slot.vehicle_props = nil
 
     MySQL.update.await(
-        'UPDATE vip_parking_slots SET vehicle_plate=NULL, vehicle_model=NULL, vehicle_props=NULL WHERE slot_id=?',
+        'UPDATE qb-reservedgarage_slots SET vehicle_plate=NULL, vehicle_model=NULL, vehicle_props=NULL WHERE slot_id=?',
         { slot.slot_id }
     )
 
@@ -115,14 +115,14 @@ local function ClearSlot(slot, removeAccess)
         AccessCache[slot.owner_citizenid] = nil
     end
 
-    TriggerClientEvent('vip_parking:client:slotCleared', -1, slot.slot_id)
+    TriggerClientEvent('qb-reservedgarage:client:slotCleared', -1, slot.slot_id)
     return plate
 end
 
 -- ── Load Slots ────────────────────────────────
 
 local function LoadSlots()
-    local rows = MySQL.query.await('SELECT * FROM vip_parking_slots')
+    local rows = MySQL.query.await('SELECT * FROM qb-reservedgarage_slots')
     for _, row in ipairs(rows) do
         local coords = json.decode(row.coords)
         Slots[row.slot_id] = {
@@ -137,7 +137,7 @@ local function LoadSlots()
     end
     RebuildOwnerIndex()
     RebuildAccessCache()
-    print(string.format('^2[vip_parking]^7 Loaded %d slot(s).', #rows))
+    print(string.format('^2[qb-reservedgarage]^7 Loaded %d slot(s).', #rows))
 end
 
 -- ── Spawn / Despawn ───────────────────────────
@@ -154,7 +154,7 @@ local function SpawnSlotVehicle(slot)
     end
 
     if not DoesEntityExist(vehicle) then
-        print('^1[vip_parking]^7 Failed to spawn vehicle for slot ' .. slot.slot_id)
+        print('^1[qb-reservedgarage]^7 Failed to spawn vehicle for slot ' .. slot.slot_id)
         return
     end
 
@@ -166,7 +166,7 @@ local function SpawnSlotVehicle(slot)
     slot.entity = NetworkGetNetworkIdFromEntity(vehicle)
 
     local propsJson = slot.vehicle_props and json.encode(slot.vehicle_props) or nil
-    TriggerClientEvent('vip_parking:client:vehicleSpawned', -1,
+    TriggerClientEvent('qb-reservedgarage:client:vehicleSpawned', -1,
         slot.slot_id, slot.entity, slot.vehicle_plate, propsJson)
 
     DebugPrint('Spawned slot=' .. slot.slot_id .. ' netId=' .. slot.entity)
@@ -176,7 +176,7 @@ local function DespawnSlotVehicle(slot)
     if not slot.entity then return end
     local entity = NetworkGetEntityFromNetworkId(slot.entity)
     if DoesEntityExist(entity) then DeleteEntity(entity) end
-    TriggerClientEvent('vip_parking:client:vehicleDespawned', -1, slot.slot_id)
+    TriggerClientEvent('qb-reservedgarage:client:vehicleDespawned', -1, slot.slot_id)
     slot.entity = nil
     DebugPrint('Despawned slot=' .. slot.slot_id)
 end
@@ -260,7 +260,7 @@ QBCore.Commands.Add('createslot', 'Create a VIP parking slot at your position (A
     }
 
     local slotId = MySQL.insert.await(
-        'INSERT INTO vip_parking_slots (owner_citizenid, coords) VALUES (?,?)',
+        'INSERT INTO qb-reservedgarage_slots (owner_citizenid, coords) VALUES (?,?)',
         { citizenid, json.encode(coords) }
     )
 
@@ -277,7 +277,7 @@ QBCore.Commands.Add('createslot', 'Create a VIP parking slot at your position (A
     if not OwnerIndex[citizenid] then OwnerIndex[citizenid] = {} end
     OwnerIndex[citizenid][slotId] = true
 
-    TriggerClientEvent('vip_parking:client:slotCreated', -1, Slots[slotId])
+    TriggerClientEvent('qb-reservedgarage:client:slotCreated', -1, Slots[slotId])
     Notify(src, string.format('Slot #%d created for %s (%d/%d slots)',
         slotId, citizenid, currentCount + 1, Config.MaxSlotsPerOwner), 'success')
     DebugPrint('Admin ' .. src .. ' created slot ' .. slotId .. ' for ' .. citizenid)
@@ -296,10 +296,10 @@ QBCore.Commands.Add('removeslot', 'Remove a VIP parking slot by ID (Admin)', {
 
     if slot.vehicle_plate then
         SendToImpound(slot.vehicle_plate)
-        print(string.format('^3[vip_parking]^7 Slot #%d removed — %s sent to impound', slotId, slot.vehicle_plate))
+        print(string.format('^3[qb-reservedgarage]^7 Slot #%d removed — %s sent to impound', slotId, slot.vehicle_plate))
     end
 
-    MySQL.query.await('DELETE FROM vip_parking_slots WHERE slot_id=?', { slotId })
+    MySQL.query.await('DELETE FROM qb-reservedgarage_slots WHERE slot_id=?', { slotId })
 
     local cid = slot.owner_citizenid
     if OwnerIndex[cid] then
@@ -313,7 +313,7 @@ QBCore.Commands.Add('removeslot', 'Remove a VIP parking slot by ID (Admin)', {
     end
 
     Slots[slotId] = nil
-    TriggerClientEvent('vip_parking:client:slotRemoved', -1, slotId)
+    TriggerClientEvent('qb-reservedgarage:client:slotRemoved', -1, slotId)
     Notify(src, 'Slot #' .. slotId .. ' removed.', 'success')
     DebugPrint('Admin ' .. src .. ' removed slot ' .. slotId)
 end, Config.AdminGroup)
@@ -399,7 +399,7 @@ end)
 
 -- ── Callbacks ─────────────────────────────────
 
-QBCore.Functions.CreateCallback('vip_parking:server:getSlots', function(src, cb)
+QBCore.Functions.CreateCallback('qb-reservedgarage:server:getSlots', function(src, cb)
     local result = {}
     for _, slot in pairs(Slots) do
         result[#result + 1] = {
@@ -413,7 +413,7 @@ QBCore.Functions.CreateCallback('vip_parking:server:getSlots', function(src, cb)
     cb(result)
 end)
 
-QBCore.Functions.CreateCallback('vip_parking:server:hasAccess', function(src, cb, slotId)
+QBCore.Functions.CreateCallback('qb-reservedgarage:server:hasAccess', function(src, cb, slotId)
     local player    = QBCore.Functions.GetPlayer(src)
     local citizenid = player.PlayerData.citizenid
     local slot      = Slots[slotId]
@@ -423,14 +423,14 @@ end)
 
 -- ── Net Events ────────────────────────────────
 
-RegisterNetEvent('vip_parking:server:beginPark', function(plate)
+RegisterNetEvent('qb-reservedgarage:server:beginPark', function(plate)
     local src    = source
     local player = QBCore.Functions.GetPlayer(src)
     if not player then return end
     ParkingState[player.PlayerData.citizenid] = plate
 end)
 
-RegisterNetEvent('vip_parking:server:parkVehicle', function(slotId, plate, model, propsJson)
+RegisterNetEvent('qb-reservedgarage:server:parkVehicle', function(slotId, plate, model, propsJson)
     local src    = source
     local player = QBCore.Functions.GetPlayer(src)
     if not player then return end
@@ -487,18 +487,18 @@ RegisterNetEvent('vip_parking:server:parkVehicle', function(slotId, plate, model
     slot.vehicle_props = propsDecoded
 
     MySQL.update.await(
-        'UPDATE vip_parking_slots SET vehicle_plate=?, vehicle_model=?, vehicle_props=? WHERE slot_id=?',
+        'UPDATE qb-reservedgarage_slots SET vehicle_plate=?, vehicle_model=?, vehicle_props=? WHERE slot_id=?',
         { plate, model, propsJson, slotId }
     )
 
     ParkingState[citizenid] = nil
     SpawnSlotVehicle(slot)
-    TriggerClientEvent('vip_parking:client:slotOccupied', -1, slotId, plate)
+    TriggerClientEvent('qb-reservedgarage:client:slotOccupied', -1, slotId, plate)
     Notify(src, 'Vehicle parked in slot #' .. slotId .. '.', 'success')
     DebugPrint(citizenid .. ' parked ' .. plate .. ' in slot ' .. slotId)
 end)
 
-RegisterNetEvent('vip_parking:server:retrieveVehicle', function(slotId)
+RegisterNetEvent('qb-reservedgarage:server:retrieveVehicle', function(slotId)
     local src    = source
     local player = QBCore.Functions.GetPlayer(src)
     if not player then return end
@@ -529,7 +529,7 @@ RegisterNetEvent('vip_parking:server:retrieveVehicle', function(slotId)
     end
 
     if not DoesEntityExist(vehicle) then
-        print('^1[vip_parking]^7 Retrieve spawn failed slot=' .. slotId .. ' — impounding ' .. plate)
+        print('^1[qb-reservedgarage]^7 Retrieve spawn failed slot=' .. slotId .. ' — impounding ' .. plate)
         SendToImpound(plate)
         Notify(src, 'Vehicle could not be spawned — sent to impound.', 'error')
         ClearSlot(slot, false)
@@ -544,7 +544,7 @@ RegisterNetEvent('vip_parking:server:retrieveVehicle', function(slotId)
     local netId    = NetworkGetNetworkIdFromEntity(vehicle)
     local propsJson = props and json.encode(props) or nil
 
-    TriggerClientEvent('vip_parking:client:warpIntoVehicle', src, netId, propsJson)
+    TriggerClientEvent('qb-reservedgarage:client:warpIntoVehicle', src, netId, propsJson)
 
     MySQL.update.await("UPDATE player_vehicles SET state=0 WHERE plate=?", { plate })
     ClearSlot(slot, false)
@@ -563,7 +563,7 @@ AddEventHandler('playerDropped', function()
     local citizenid = player.PlayerData.citizenid
     local plate     = ParkingState[citizenid]
     if plate then
-        print(string.format('^3[vip_parking]^7 %s dropped mid-park (plate=%s) — impounding', citizenid, plate))
+        print(string.format('^3[qb-reservedgarage]^7 %s dropped mid-park (plate=%s) — impounding', citizenid, plate))
         SendToImpound(plate)
         ParkingState[citizenid] = nil
     end
@@ -579,21 +579,21 @@ local function ReconcileSlots()
                 'SELECT state FROM player_vehicles WHERE plate=?', { slot.vehicle_plate }
             )
             if state == nil then
-                print(string.format('^3[vip_parking]^7 Slot #%d: %s missing from player_vehicles — clearing', slotId, slot.vehicle_plate))
+                print(string.format('^3[qb-reservedgarage]^7 Slot #%d: %s missing from player_vehicles — clearing', slotId, slot.vehicle_plate))
                 ClearSlot(slot, false); fixed = fixed + 1
             elseif state == 1 then
-                print(string.format('^3[vip_parking]^7 Slot #%d: %s garaged (crash) — restoring state=0', slotId, slot.vehicle_plate))
+                print(string.format('^3[qb-reservedgarage]^7 Slot #%d: %s garaged (crash) — restoring state=0', slotId, slot.vehicle_plate))
                 MySQL.update.await("UPDATE player_vehicles SET state=0 WHERE plate=?", { slot.vehicle_plate })
                 fixed = fixed + 1
             elseif state == 2 then
-                print(string.format('^3[vip_parking]^7 Slot #%d: %s in impound — clearing slot', slotId, slot.vehicle_plate))
+                print(string.format('^3[qb-reservedgarage]^7 Slot #%d: %s in impound — clearing slot', slotId, slot.vehicle_plate))
                 ClearSlot(slot, false); fixed = fixed + 1
             end
         end
     end
     print(fixed > 0
-        and string.format('^2[vip_parking]^7 Reconciliation done — fixed %d slot(s)', fixed)
-        or  '^2[vip_parking]^7 Reconciliation done — all slots consistent')
+        and string.format('^2[qb-reservedgarage]^7 Reconciliation done — fixed %d slot(s)', fixed)
+        or  '^2[qb-reservedgarage]^7 Reconciliation done — all slots consistent')
 end
 
 -- ── Bootstrap ─────────────────────────────────

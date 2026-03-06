@@ -1,5 +1,5 @@
 -- ─────────────────────────────────────────────
--- vip_parking — client/main.lua v4
+-- qb-reservedgarage — client/main.lua v4
 -- Multi-slot. Access is owner-level.
 -- No vehicle spawning happens client-side.
 -- ─────────────────────────────────────────────
@@ -28,7 +28,7 @@ local function Notify(msg, ntype)
 end
 
 local function DebugPrint(msg)
-    if Config.Debug then print('^3[vip_parking:client]^7 ' .. tostring(msg)) end
+    if Config.Debug then print('^3[qb-reservedgarage:client]^7 ' .. tostring(msg)) end
 end
 
 -- ── Access Resolution ─────────────────────────
@@ -42,7 +42,7 @@ local function ResolveAccess(slotId, cb)
     end
 
     cached.accessPending = true
-    QBCore.Functions.TriggerCallback('vip_parking:server:hasAccess', function(result)
+    QBCore.Functions.TriggerCallback('qb-reservedgarage:server:hasAccess', function(result)
         if SlotCache[slotId] then
             SlotCache[slotId].hasAccess      = result
             SlotCache[slotId].accessPending  = false
@@ -95,7 +95,7 @@ local function SetupSlotZone(slot)
             options = {
                 {
                     type  = 'client',
-                    event = 'vip_parking:client:tryParkVehicle',
+                    event = 'qb-reservedgarage:client:tryParkVehicle',
                     icon  = 'fas fa-parking',
                     label = 'Park Vehicle',
                     slotId = slotId,
@@ -111,7 +111,7 @@ local function SetupSlotZone(slot)
                 },
                 {
                     type  = 'client',
-                    event = 'vip_parking:client:tryRetrieveVehicle',
+                    event = 'qb-reservedgarage:client:tryRetrieveVehicle',
                     icon  = 'fas fa-car',
                     label = 'Retrieve Vehicle',
                     slotId = slotId,
@@ -149,7 +149,7 @@ local function SetupEntityTarget(slotId, netId)
         options = {
             {
                 type  = 'client',
-                event = 'vip_parking:client:tryRetrieveVehicle',
+                event = 'qb-reservedgarage:client:tryRetrieveVehicle',
                 icon  = 'fas fa-car-side',
                 label = 'Retrieve Vehicle',
                 slotId = slotId,
@@ -161,7 +161,7 @@ local function SetupEntityTarget(slotId, netId)
             },
             {
                 type  = 'client',
-                event = 'vip_parking:client:tryParkVehicle',
+                event = 'qb-reservedgarage:client:tryParkVehicle',
                 icon  = 'fas fa-parking',
                 label = 'Park Vehicle',
                 slotId = slotId,
@@ -212,7 +212,7 @@ end
 
 AddEventHandler('QBCore:Client:OnPlayerLoaded', function()
     SlotCache = {}
-    QBCore.Functions.TriggerCallback('vip_parking:server:getSlots', function(slots)
+    QBCore.Functions.TriggerCallback('qb-reservedgarage:server:getSlots', function(slots)
         InitAllSlots(slots)
     end)
 end)
@@ -221,14 +221,14 @@ AddEventHandler('onClientResourceStart', function(resourceName)
     if resourceName ~= GetCurrentResourceName() then return end
     local pd = QBCore.Functions.GetPlayerData()
     if not pd or not pd.citizenid then return end
-    QBCore.Functions.TriggerCallback('vip_parking:server:getSlots', function(slots)
+    QBCore.Functions.TriggerCallback('qb-reservedgarage:server:getSlots', function(slots)
         InitAllSlots(slots)
     end)
 end)
 
 -- ── Park Vehicle ──────────────────────────────
 
-RegisterNetEvent('vip_parking:client:tryParkVehicle', function(data)
+RegisterNetEvent('qb-reservedgarage:client:tryParkVehicle', function(data)
     local slotId = data.slotId
     local ped    = PlayerPedId()
     local veh    = GetVehiclePedIsIn(ped, false)
@@ -248,23 +248,23 @@ RegisterNetEvent('vip_parking:client:tryParkVehicle', function(data)
 
     local propsJson = QBCore.Functions.GetVehicleProperties(veh)
 
-    TriggerServerEvent('vip_parking:server:beginPark', plate)
+    TriggerServerEvent('qb-reservedgarage:server:beginPark', plate)
     TaskLeaveVehicle(ped, veh, 16)
     Wait(900)
-    TriggerServerEvent('vip_parking:server:parkVehicle', slotId, plate, modelName, json.encode(propsJson))
+    TriggerServerEvent('qb-reservedgarage:server:parkVehicle', slotId, plate, modelName, json.encode(propsJson))
 end)
 
 -- ── Retrieve Vehicle ──────────────────────────
 
-RegisterNetEvent('vip_parking:client:tryRetrieveVehicle', function(data)
-    TriggerServerEvent('vip_parking:server:retrieveVehicle', data.slotId)
+RegisterNetEvent('qb-reservedgarage:client:tryRetrieveVehicle', function(data)
+    TriggerServerEvent('qb-reservedgarage:server:retrieveVehicle', data.slotId)
 end)
 
 -- ── Warp Into Retrieved Vehicle ───────────────
 -- Waits for entity to exist, then waits for model to fully load before applying props
 -- This ensures mods, colours, neons and extras are always restored correctly
 
-RegisterNetEvent('vip_parking:client:warpIntoVehicle', function(netId, propsJson)
+RegisterNetEvent('qb-reservedgarage:client:warpIntoVehicle', function(netId, propsJson)
     -- Wait for entity to exist
     local entity  = 0
     local timeout = 0
@@ -313,12 +313,12 @@ end)
 
 -- ── Server → Client Sync ──────────────────────
 
-RegisterNetEvent('vip_parking:client:slotCreated', function(slot)
+RegisterNetEvent('qb-reservedgarage:client:slotCreated', function(slot)
     SetupSlotZone(slot)
     DebugPrint('New slot registered: #' .. slot.slot_id)
 end)
 
-RegisterNetEvent('vip_parking:client:slotRemoved', function(slotId)
+RegisterNetEvent('qb-reservedgarage:client:slotRemoved', function(slotId)
     if ActiveZones[slotId] then
         exports['qb-target']:RemoveZone(ActiveZones[slotId])
         ActiveZones[slotId] = nil
@@ -330,7 +330,7 @@ RegisterNetEvent('vip_parking:client:slotRemoved', function(slotId)
     SlotCache[slotId] = nil
 end)
 
-RegisterNetEvent('vip_parking:client:vehicleSpawned', function(slotId, netId, plate, propsJson)
+RegisterNetEvent('qb-reservedgarage:client:vehicleSpawned', function(slotId, netId, plate, propsJson)
     if SlotCache[slotId] then
         SlotCache[slotId].vehicle_plate = plate
         local citizenid = QBCore.Functions.GetPlayerData().citizenid
@@ -351,14 +351,14 @@ RegisterNetEvent('vip_parking:client:vehicleSpawned', function(slotId, netId, pl
     end)
 end)
 
-RegisterNetEvent('vip_parking:client:vehicleDespawned', function(slotId)
+RegisterNetEvent('qb-reservedgarage:client:vehicleDespawned', function(slotId)
     if EntityTargets[slotId] then
         exports['qb-target']:RemoveTargetEntity(EntityTargets[slotId])
         EntityTargets[slotId] = nil
     end
 end)
 
-RegisterNetEvent('vip_parking:client:slotCleared', function(slotId)
+RegisterNetEvent('qb-reservedgarage:client:slotCleared', function(slotId)
     if SlotCache[slotId] then
         SlotCache[slotId].vehicle_plate = nil
     end
@@ -368,7 +368,7 @@ RegisterNetEvent('vip_parking:client:slotCleared', function(slotId)
     end
 end)
 
-RegisterNetEvent('vip_parking:client:slotOccupied', function(slotId, plate)
+RegisterNetEvent('qb-reservedgarage:client:slotOccupied', function(slotId, plate)
     if SlotCache[slotId] then
         SlotCache[slotId].vehicle_plate = plate
         local citizenid = QBCore.Functions.GetPlayerData().citizenid
