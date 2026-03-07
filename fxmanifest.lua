@@ -1,7 +1,7 @@
 fx_version 'adamant'
 game 'gta5'
 
-author      'vip_parking'
+author      'qb-reservedgarage'
 description 'VIP Persistent Parking Slot System — QBCore'
 version     '2.0.0'
 

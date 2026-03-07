@@ -89,11 +89,11 @@ end
 
 local function ApplyServerProps(vehicle, props)
     if not props then return end
-    if props.color1     then SetVehicleColours(vehicle, props.color1, props.color2 or props.color1) end
-    if props.fuelLevel  then SetVehicleFuelLevel(vehicle, props.fuelLevel) end
-    if props.engineHealth then SetVehicleEngineHealth(vehicle, props.engineHealth) end
-    if props.bodyHealth   then SetVehicleBodyHealth(vehicle, props.bodyHealth) end
-    if props.tankHealth   then SetVehiclePetrolTankHealth(vehicle, props.tankHealth) end
+    -- Only apply what actually works server-side
+    -- Everything else (mods, colours, health, fuel) is applied client-side via SetVehicleProperties
+    if props.color1 then
+        SetVehicleColours(vehicle, props.color1, props.color2 or props.color1)
+    end
 end
 
 local function ClearSlot(slot, removeAccess)
@@ -103,7 +103,7 @@ local function ClearSlot(slot, removeAccess)
     slot.vehicle_props = nil
 
     MySQL.update.await(
-        'UPDATE qb-reservedgarage_slots SET vehicle_plate=NULL, vehicle_model=NULL, vehicle_props=NULL WHERE slot_id=?',
+        'UPDATE vip_parking_slots SET vehicle_plate=NULL, vehicle_model=NULL, vehicle_props=NULL WHERE slot_id=?',
         { slot.slot_id }
     )
 
@@ -122,7 +122,7 @@ end
 -- ── Load Slots ────────────────────────────────
 
 local function LoadSlots()
-    local rows = MySQL.query.await('SELECT * FROM qb-reservedgarage_slots')
+    local rows = MySQL.query.await('SELECT * FROM vip_parking_slots')
     for _, row in ipairs(rows) do
         local coords = json.decode(row.coords)
         Slots[row.slot_id] = {
@@ -142,9 +142,29 @@ end
 
 -- ── Spawn / Despawn ───────────────────────────
 
+local SpawningLocks = {}  -- slotId → true while a spawn is in progress
+
 local function SpawnSlotVehicle(slot)
-    if slot.entity then return end
+    local slotId = slot.slot_id
+
+    -- Prevent concurrent spawns for the same slot
+    if SpawningLocks[slotId] then
+        DebugPrint('Spawn already in progress for slot ' .. slotId .. ', skipping')
+        return
+    end
+
+    if slot.entity then
+        local existing = NetworkGetEntityFromNetworkId(slot.entity)
+        if DoesEntityExist(existing) then
+            DebugPrint('Slot ' .. slotId .. ' already has a live entity, skipping spawn')
+            return
+        end
+        slot.entity = nil
+    end
+
     if not slot.vehicle_model then return end
+
+    SpawningLocks[slotId] = true
 
     local c = slot.coords
     local vehicle = CreateVehicle(joaat(slot.vehicle_model), c.x, c.y, c.z, c.w, true, false)
@@ -154,28 +174,32 @@ local function SpawnSlotVehicle(slot)
     end
 
     if not DoesEntityExist(vehicle) then
-        print('^1[qb-reservedgarage]^7 Failed to spawn vehicle for slot ' .. slot.slot_id)
+        print('^1[qb-reservedgarage]^7 Failed to spawn vehicle for slot ' .. slotId)
+        SpawningLocks[slotId] = nil
         return
     end
 
-    SetEntityAsMissionEntity(vehicle, true, true)
     SetVehicleNumberPlateText(vehicle, slot.vehicle_plate)
     ApplyServerProps(vehicle, slot.vehicle_props)
     SetVehicleDoorsLocked(vehicle, 2)
 
     slot.entity = NetworkGetNetworkIdFromEntity(vehicle)
+    SpawningLocks[slotId] = nil
 
     local propsJson = slot.vehicle_props and json.encode(slot.vehicle_props) or nil
     TriggerClientEvent('qb-reservedgarage:client:vehicleSpawned', -1,
-        slot.slot_id, slot.entity, slot.vehicle_plate, propsJson)
+        slotId, slot.entity, slot.vehicle_plate, propsJson)
 
-    DebugPrint('Spawned slot=' .. slot.slot_id .. ' netId=' .. slot.entity)
+    DebugPrint('Spawned slot=' .. slotId .. ' netId=' .. slot.entity)
 end
 
 local function DespawnSlotVehicle(slot)
     if not slot.entity then return end
-    local entity = NetworkGetEntityFromNetworkId(slot.entity)
+    local netId = slot.entity
+    local entity = NetworkGetEntityFromNetworkId(netId)
     if DoesEntityExist(entity) then DeleteEntity(entity) end
+    -- Also tell all clients to delete it locally in case server delete didn't propagate
+    TriggerClientEvent('qb-reservedgarage:client:forceDeleteEntity', -1, netId)
     TriggerClientEvent('qb-reservedgarage:client:vehicleDespawned', -1, slot.slot_id)
     slot.entity = nil
     DebugPrint('Despawned slot=' .. slot.slot_id)
@@ -260,7 +284,7 @@ QBCore.Commands.Add('createslot', 'Create a VIP parking slot at your position (A
     }
 
     local slotId = MySQL.insert.await(
-        'INSERT INTO qb-reservedgarage_slots (owner_citizenid, coords) VALUES (?,?)',
+        'INSERT INTO vip_parking_slots (owner_citizenid, coords) VALUES (?,?)',
         { citizenid, json.encode(coords) }
     )
 
@@ -299,7 +323,7 @@ QBCore.Commands.Add('removeslot', 'Remove a VIP parking slot by ID (Admin)', {
         print(string.format('^3[qb-reservedgarage]^7 Slot #%d removed — %s sent to impound', slotId, slot.vehicle_plate))
     end
 
-    MySQL.query.await('DELETE FROM qb-reservedgarage_slots WHERE slot_id=?', { slotId })
+    MySQL.query.await('DELETE FROM vip_parking_slots WHERE slot_id=?', { slotId })
 
     local cid = slot.owner_citizenid
     if OwnerIndex[cid] then
@@ -344,7 +368,6 @@ QBCore.Commands.Add('addkeypersistent', 'Grant a player access to all your VIP s
         Notify(src, targetCid .. ' already has access to your slots.', 'error'); return
     end
 
-    -- Enforce max access grants cap
     local currentGrants = GrantCountForOwner(citizenid)
     if currentGrants >= Config.MaxAccessGrantsPerOwner then
         Notify(src, string.format('You have reached the maximum of %d access grants.', Config.MaxAccessGrantsPerOwner), 'error')
@@ -439,7 +462,6 @@ RegisterNetEvent('qb-reservedgarage:server:parkVehicle', function(slotId, plate,
     local slot      = Slots[slotId]
     if not slot then return end
 
-    -- Validate model against QBCore shared vehicles
     if not model or not QBCore.Shared.Vehicles[model] then
         Notify(src, 'Invalid vehicle model.', 'error')
         ParkingState[citizenid] = nil
@@ -487,16 +509,25 @@ RegisterNetEvent('qb-reservedgarage:server:parkVehicle', function(slotId, plate,
     slot.vehicle_props = propsDecoded
 
     MySQL.update.await(
-        'UPDATE qb-reservedgarage_slots SET vehicle_plate=?, vehicle_model=?, vehicle_props=? WHERE slot_id=?',
+        'UPDATE vip_parking_slots SET vehicle_plate=?, vehicle_model=?, vehicle_props=? WHERE slot_id=?',
         { plate, model, propsJson, slotId }
     )
 
     ParkingState[citizenid] = nil
-    SpawnSlotVehicle(slot)
+
     TriggerClientEvent('qb-reservedgarage:client:slotOccupied', -1, slotId, plate)
     Notify(src, 'Vehicle parked in slot #' .. slotId .. '.', 'success')
     DebugPrint(citizenid .. ' parked ' .. plate .. ' in slot ' .. slotId)
+
+    -- Wait for client to finish deleting original vehicle, then spawn static copy
+    SetTimeout(2000, function()
+        if Slots[slotId] and Slots[slotId].vehicle_plate == plate then
+            SpawnSlotVehicle(Slots[slotId])
+        end
+    end)
 end)
+
+local RetrieveLocks = {}  -- citizenid → true while retrieve is in progress
 
 RegisterNetEvent('qb-reservedgarage:server:retrieveVehicle', function(slotId)
     local src    = source
@@ -507,6 +538,10 @@ RegisterNetEvent('qb-reservedgarage:server:retrieveVehicle', function(slotId)
     local slot      = Slots[slotId]
     if not slot then return end
 
+    if RetrieveLocks[citizenid] then
+        Notify(src, 'Already retrieving a vehicle, please wait.', 'error'); return
+    end
+
     if not HasAccessToOwner(slot.owner_citizenid, citizenid) then
         Notify(src, 'You do not have access to this vehicle.', 'error'); return
     end
@@ -515,42 +550,50 @@ RegisterNetEvent('qb-reservedgarage:server:retrieveVehicle', function(slotId)
         Notify(src, 'No vehicle is parked here.', 'error'); return
     end
 
+    RetrieveLocks[citizenid] = true
+
     local plate  = slot.vehicle_plate
     local model  = slot.vehicle_model
     local props  = slot.vehicle_props
     local coords = slot.coords
 
+    -- Clear slot FIRST so streaming thread won't respawn static copy
+    ClearSlot(slot, false)
     DespawnSlotVehicle(slot)
 
-    local vehicle  = CreateVehicle(joaat(model), coords.x, coords.y, coords.z, coords.w, true, false)
-    local attempts = 0
-    while not DoesEntityExist(vehicle) and attempts < 30 do
-        Wait(100); attempts = attempts + 1
+    local ok, err = pcall(function()
+        local vehicle  = CreateVehicle(joaat(model), coords.x, coords.y, coords.z, coords.w, true, false)
+        local attempts = 0
+        while not DoesEntityExist(vehicle) and attempts < 30 do
+            Wait(100); attempts = attempts + 1
+        end
+
+        if not DoesEntityExist(vehicle) then
+            SendToImpound(plate)
+            Notify(src, 'Vehicle could not be spawned — sent to impound.', 'error')
+            return
+        end
+
+        SetVehicleNumberPlateText(vehicle, plate)
+        ApplyServerProps(vehicle, props)
+        SetVehicleDoorsLocked(vehicle, 1)
+
+        local netId     = NetworkGetNetworkIdFromEntity(vehicle)
+        local propsJson = props and json.encode(props) or nil
+
+        MySQL.update.await("UPDATE player_vehicles SET state=0 WHERE plate=?", { plate })
+        TriggerClientEvent('qb-reservedgarage:client:warpIntoVehicle', src, netId, propsJson)
+        Notify(src, 'Vehicle ready. Drive safe!', 'success')
+        DebugPrint(citizenid .. ' retrieved ' .. plate .. ' from slot ' .. slotId)
+    end)
+
+    if not ok then
+        print('^1[qb-reservedgarage]^7 Retrieve error for ' .. citizenid .. ': ' .. tostring(err))
+        Notify(src, 'Something went wrong retrieving your vehicle.', 'error')
     end
 
-    if not DoesEntityExist(vehicle) then
-        print('^1[qb-reservedgarage]^7 Retrieve spawn failed slot=' .. slotId .. ' — impounding ' .. plate)
-        SendToImpound(plate)
-        Notify(src, 'Vehicle could not be spawned — sent to impound.', 'error')
-        ClearSlot(slot, false)
-        return
-    end
-
-    SetEntityAsMissionEntity(vehicle, true, true)
-    SetVehicleNumberPlateText(vehicle, plate)
-    ApplyServerProps(vehicle, props)
-    SetVehicleDoorsLocked(vehicle, 1)
-
-    local netId    = NetworkGetNetworkIdFromEntity(vehicle)
-    local propsJson = props and json.encode(props) or nil
-
-    TriggerClientEvent('qb-reservedgarage:client:warpIntoVehicle', src, netId, propsJson)
-
-    MySQL.update.await("UPDATE player_vehicles SET state=0 WHERE plate=?", { plate })
-    ClearSlot(slot, false)
-
-    Notify(src, 'Vehicle ready. Drive safe!', 'success')
-    DebugPrint(citizenid .. ' retrieved ' .. plate .. ' from slot ' .. slotId)
+    -- Always release the lock no matter what happened
+    RetrieveLocks[citizenid] = nil
 end)
 
 -- ── Disconnect Guard ──────────────────────────

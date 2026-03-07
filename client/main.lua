@@ -239,19 +239,48 @@ RegisterNetEvent('qb-reservedgarage:client:tryParkVehicle', function(data)
     end
 
     local plate     = string.gsub(GetVehicleNumberPlateText(veh), '%s+', '')
-    local modelName = QBCore.Functions.GetVehicleProperties(veh).model or ''
+    local modelHash = GetEntityModel(veh)
+    local modelName = ''
+    for name, _ in pairs(QBCore.Shared.Vehicles) do
+        if joaat(name) == modelHash then
+            modelName = name
+            break
+        end
+    end
 
-    -- Validate model name from QBCore vehicle props
     if modelName == '' then
         Notify('Could not identify this vehicle model.', 'error'); return
     end
 
     local propsJson = QBCore.Functions.GetVehicleProperties(veh)
 
+    -- Tell server we are starting a park (disconnect guard)
     TriggerServerEvent('qb-reservedgarage:server:beginPark', plate)
+
+    -- Eject player from vehicle first
     TaskLeaveVehicle(ped, veh, 16)
-    Wait(900)
+    Wait(1500)
+
+    -- Take network control and delete the vehicle
+    NetworkRequestControlOfEntity(veh)
+    local ownerWait = 0
+    while not NetworkHasControlOfEntity(veh) and ownerWait < 30 do
+        Wait(100)
+        ownerWait = ownerWait + 1
+    end
+    SetEntityAsMissionEntity(veh, true, true)
+    DeleteVehicle(veh)
+
+    -- Wait until confirmed gone
+    local deleteWait = 0
+    while DoesEntityExist(veh) and deleteWait < 40 do
+        Wait(100)
+        deleteWait = deleteWait + 1
+    end
+
+    -- Tell server to save — streaming thread will spawn static copy on next interval
     TriggerServerEvent('qb-reservedgarage:server:parkVehicle', slotId, plate, modelName, json.encode(propsJson))
+    Notify('Vehicle parked! Static copy will appear shortly.', 'success')
 end)
 
 -- ── Retrieve Vehicle ──────────────────────────
@@ -265,7 +294,6 @@ end)
 -- This ensures mods, colours, neons and extras are always restored correctly
 
 RegisterNetEvent('qb-reservedgarage:client:warpIntoVehicle', function(netId, propsJson)
-    -- Wait for entity to exist
     local entity  = 0
     local timeout = 0
     while not DoesEntityExist(entity) and timeout < 50 do
@@ -282,27 +310,23 @@ RegisterNetEvent('qb-reservedgarage:client:warpIntoVehicle', function(netId, pro
     TaskWarpPedIntoVehicle(ped, entity, -1)
     SetVehicleEngineOn(entity, true, true, false)
 
-    -- Wait for model to be fully streamed in before applying props
-    -- This prevents mods/colours/neons being silently dropped
     if propsJson then
         local props = type(propsJson) == 'string' and json.decode(propsJson) or propsJson
 
         if props then
-            local modelHash   = GetEntityModel(entity)
-            local modelLoaded = false
-            local waited      = 0
+            local modelHash = GetEntityModel(entity)
 
-            while not modelLoaded and waited < 50 do
-                modelLoaded = HasModelLoaded(modelHash)
-                if not modelLoaded then
-                    Wait(100)
-                    waited = waited + 1
-                end
+            -- Wait for model to be fully streamed in
+            local waited = 0
+            while not HasModelLoaded(modelHash) and waited < 50 do
+                Wait(100)
+                waited = waited + 1
             end
 
-            -- Extra frame to let streaming settle
-            Wait(200)
-
+            -- Apply props, wait, then apply again to guarantee mods/colours/neons stick
+            Wait(300)
+            QBCore.Functions.SetVehicleProperties(entity, props)
+            Wait(500)
             QBCore.Functions.SetVehicleProperties(entity, props)
         end
     end
@@ -340,12 +364,18 @@ RegisterNetEvent('qb-reservedgarage:client:vehicleSpawned', function(slotId, net
     end
 
     Citizen.SetTimeout(800, function()
-        if propsJson then
-            local entity = NetworkGetEntityFromNetworkId(netId)
-            if DoesEntityExist(entity) then
+        local entity = NetworkGetEntityFromNetworkId(netId)
+        if DoesEntityExist(entity) then
+            -- Apply props
+            if propsJson then
                 local props = type(propsJson) == 'string' and json.decode(propsJson) or propsJson
                 if props then QBCore.Functions.SetVehicleProperties(entity, props) end
             end
+            -- Make static vehicle truly unenterable and frozen client-side
+            SetEntityInvincible(entity, true)
+            FreezeEntityPosition(entity, true)
+            SetVehicleDoorsLocked(entity, 10) -- 10 = cannot be entered by anyone
+            SetVehicleCanBreak(entity, false)
         end
         SetupEntityTarget(slotId, netId)
     end)
@@ -355,6 +385,18 @@ RegisterNetEvent('qb-reservedgarage:client:vehicleDespawned', function(slotId)
     if EntityTargets[slotId] then
         exports['qb-target']:RemoveTargetEntity(EntityTargets[slotId])
         EntityTargets[slotId] = nil
+    end
+end)
+
+-- Force delete a frozen/static entity that server delete may not have cleaned up
+RegisterNetEvent('qb-reservedgarage:client:forceDeleteEntity', function(netId)
+    local entity = NetworkGetEntityFromNetworkId(netId)
+    if DoesEntityExist(entity) then
+        SetEntityAsMissionEntity(entity, true, true)
+        FreezeEntityPosition(entity, false)
+        SetEntityInvincible(entity, false)
+        DeleteEntity(entity)
+        DebugPrint('Force deleted entity netId=' .. netId)
     end
 end)
 
