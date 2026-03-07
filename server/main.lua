@@ -98,12 +98,13 @@ end
 
 local function ClearSlot(slot, removeAccess)
     local plate = slot.vehicle_plate
-    slot.vehicle_plate = nil
-    slot.vehicle_model = nil
-    slot.vehicle_props = nil
+    slot.vehicle_plate  = nil
+    slot.vehicle_model  = nil
+    slot.vehicle_props  = nil
+    slot.parked_coords  = nil  -- clear saved parked position
 
     MySQL.update.await(
-        'UPDATE vip_parking_slots SET vehicle_plate=NULL, vehicle_model=NULL, vehicle_props=NULL WHERE slot_id=?',
+        'UPDATE vip_parking_slots SET vehicle_plate=NULL, vehicle_model=NULL, vehicle_props=NULL, parked_coords=NULL WHERE slot_id=?',
         { slot.slot_id }
     )
 
@@ -132,6 +133,7 @@ local function LoadSlots()
             vehicle_plate    = row.vehicle_plate,
             vehicle_model    = row.vehicle_model,
             vehicle_props    = row.vehicle_props and json.decode(row.vehicle_props) or nil,
+            parked_coords    = row.parked_coords and json.decode(row.parked_coords) or nil,  -- restore saved position
             entity           = nil,
         }
     end
@@ -166,7 +168,8 @@ local function SpawnSlotVehicle(slot)
 
     SpawningLocks[slotId] = true
 
-    local c = slot.coords
+    -- Use parked_coords (exact position when parked) if available, otherwise fall back to slot coords
+    local c = slot.parked_coords or slot.coords
     local vehicle = CreateVehicle(joaat(slot.vehicle_model), c.x, c.y, c.z, c.w, true, false)
     local attempts = 0
     while not DoesEntityExist(vehicle) and attempts < 30 do
@@ -295,6 +298,7 @@ QBCore.Commands.Add('createslot', 'Create a VIP parking slot at your position (A
         vehicle_plate   = nil,
         vehicle_model   = nil,
         vehicle_props   = nil,
+        parked_coords   = nil,
         entity          = nil,
     }
 
@@ -453,7 +457,8 @@ RegisterNetEvent('qb-reservedgarage:server:beginPark', function(plate)
     ParkingState[player.PlayerData.citizenid] = plate
 end)
 
-RegisterNetEvent('qb-reservedgarage:server:parkVehicle', function(slotId, plate, model, propsJson)
+-- Accept parkedCoords as the 5th argument (exact position/heading when the vehicle was parked)
+RegisterNetEvent('qb-reservedgarage:server:parkVehicle', function(slotId, plate, model, propsJson, parkedCoords)
     local src    = source
     local player = QBCore.Functions.GetPlayer(src)
     if not player then return end
@@ -479,6 +484,11 @@ RegisterNetEvent('qb-reservedgarage:server:parkVehicle', function(slotId, plate,
         Notify(src, 'Invalid vehicle props.', 'error')
         ParkingState[citizenid] = nil
         return
+    end
+
+    -- Validate parkedCoords if provided
+    if parkedCoords ~= nil and type(parkedCoords) ~= 'table' then
+        parkedCoords = nil
     end
 
     local vehicleOwner = MySQL.scalar.await(
@@ -507,17 +517,18 @@ RegisterNetEvent('qb-reservedgarage:server:parkVehicle', function(slotId, plate,
     slot.vehicle_plate = plate
     slot.vehicle_model = model
     slot.vehicle_props = propsDecoded
+    slot.parked_coords = parkedCoords  -- save exact parked position
 
     MySQL.update.await(
-        'UPDATE vip_parking_slots SET vehicle_plate=?, vehicle_model=?, vehicle_props=? WHERE slot_id=?',
-        { plate, model, propsJson, slotId }
+        'UPDATE vip_parking_slots SET vehicle_plate=?, vehicle_model=?, vehicle_props=?, parked_coords=? WHERE slot_id=?',
+        { plate, model, propsJson, parkedCoords and json.encode(parkedCoords) or nil, slotId }
     )
 
     ParkingState[citizenid] = nil
 
     TriggerClientEvent('qb-reservedgarage:client:slotOccupied', -1, slotId, plate)
     Notify(src, 'Vehicle parked in slot #' .. slotId .. '.', 'success')
-    DebugPrint(citizenid .. ' parked ' .. plate .. ' in slot ' .. slotId)
+    DebugPrint(citizenid .. ' parked ' .. plate .. ' in slot ' .. slotId .. (parkedCoords and ' at exact coords' or ' (no coords, using slot default)'))
 
     -- Wait for client to finish deleting original vehicle, then spawn static copy
     SetTimeout(2000, function()
@@ -555,14 +566,15 @@ RegisterNetEvent('qb-reservedgarage:server:retrieveVehicle', function(slotId)
     local plate  = slot.vehicle_plate
     local model  = slot.vehicle_model
     local props  = slot.vehicle_props
-    local coords = slot.coords
+    -- Use parked_coords (exact parked position) if available, otherwise fall back to slot coords
+    local spawnCoords = slot.parked_coords or slot.coords
 
     -- Clear slot FIRST so streaming thread won't respawn static copy
     ClearSlot(slot, false)
     DespawnSlotVehicle(slot)
 
     local ok, err = pcall(function()
-        local vehicle  = CreateVehicle(joaat(model), coords.x, coords.y, coords.z, coords.w, true, false)
+        local vehicle  = CreateVehicle(joaat(model), spawnCoords.x, spawnCoords.y, spawnCoords.z, spawnCoords.w, true, false)
         local attempts = 0
         while not DoesEntityExist(vehicle) and attempts < 30 do
             Wait(100); attempts = attempts + 1

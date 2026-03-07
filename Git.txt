@@ -1,0 +1,5 @@
+crtl + `
+
+git add .
+git commit -m "Fix: server-side natives, freeze static vehicle, retrieve lock"
+git push origin main

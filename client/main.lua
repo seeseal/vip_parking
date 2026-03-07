@@ -254,6 +254,10 @@ RegisterNetEvent('qb-reservedgarage:client:tryParkVehicle', function(data)
 
     local propsJson = QBCore.Functions.GetVehicleProperties(veh)
 
+    -- Capture exact position and heading BEFORE ejecting/deleting the vehicle
+    local vehCoords  = GetEntityCoords(veh)
+    local vehHeading = GetEntityHeading(veh)
+
     -- Tell server we are starting a park (disconnect guard)
     TriggerServerEvent('qb-reservedgarage:server:beginPark', plate)
 
@@ -278,8 +282,13 @@ RegisterNetEvent('qb-reservedgarage:client:tryParkVehicle', function(data)
         deleteWait = deleteWait + 1
     end
 
-    -- Tell server to save — streaming thread will spawn static copy on next interval
-    TriggerServerEvent('qb-reservedgarage:server:parkVehicle', slotId, plate, modelName, json.encode(propsJson))
+    -- Send exact parked position/heading to server alongside the normal park data
+    TriggerServerEvent('qb-reservedgarage:server:parkVehicle', slotId, plate, modelName, json.encode(propsJson), {
+        x = vehCoords.x,
+        y = vehCoords.y,
+        z = vehCoords.z,
+        w = vehHeading,
+    })
     Notify('Vehicle parked! Static copy will appear shortly.', 'success')
 end)
 
