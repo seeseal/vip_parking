@@ -1,25 +1,23 @@
 -- ─────────────────────────────────────────────
--- qb-reservedgarage — client/main.lua v4
+-- qb-reservedgarage — client/main.lua v5
 -- Multi-slot. Access is owner-level.
 -- No vehicle spawning happens client-side.
+-- E key interaction. Floating 3D slot markers.
 -- ─────────────────────────────────────────────
 
 local QBCore = exports['qb-core']:GetCoreObject()
 
-if not Config then
-    Config = {}
-    Config.Debug                = false
-    Config.TargetRadius         = 2.5
-    Config.SlotInteractDistance = 5.0
-end
+if not Config then Config = {} end
+Config.Debug              = Config.Debug              ~= nil and Config.Debug              or false
+Config.MarkerDrawDistance = Config.MarkerDrawDistance ~= nil and Config.MarkerDrawDistance or 10.0
+Config.InteractDistance   = Config.InteractDistance   ~= nil and Config.InteractDistance   or 3
 
 -- ── State ─────────────────────────────────────
 
-local ActiveZones   = {}   -- slotId → zone name
-local EntityTargets = {}   -- slotId → entity handle
-
--- SlotCache: slotId → { owner_citizenid, vehicle_plate, hasAccess, accessPending }
-local SlotCache = {}
+-- SlotCache: slotId → { owner_citizenid, owner_name, coords, vehicle_plate, hasAccess, accessPending, slotIndex }
+local SlotCache        = {}
+local SlotIndexMap     = {}
+local SlotIndexCounter = 0
 
 -- ── Helpers ───────────────────────────────────
 
@@ -36,40 +34,46 @@ end
 local function ResolveAccess(slotId, cb)
     local cached = SlotCache[slotId]
     if not cached then return end
-    if cached.accessPending then
-        DebugPrint('Access resolve already pending for slot ' .. slotId)
-        return
-    end
+    if cached.accessPending then return end
 
     cached.accessPending = true
     QBCore.Functions.TriggerCallback('qb-reservedgarage:server:hasAccess', function(result)
         if SlotCache[slotId] then
-            SlotCache[slotId].hasAccess      = result
-            SlotCache[slotId].accessPending  = false
+            SlotCache[slotId].hasAccess     = result
+            SlotCache[slotId].accessPending = false
         end
         if cb then cb(result) end
     end, slotId)
 end
 
--- ── Zone Setup ────────────────────────────────
+-- ── Slot Registration ─────────────────────────
 
-local function SetupSlotZone(slot)
-    local slotId   = slot.slot_id
-    local zoneName = 'vip_slot_' .. slotId
+local function RegisterSlot(slot)
+    local slotId    = slot.slot_id
+    local citizenid = QBCore.Functions.GetPlayerData().citizenid
+
+    if not SlotIndexMap[slotId] then
+        SlotIndexCounter     = SlotIndexCounter + 1
+        SlotIndexMap[slotId] = SlotIndexCounter
+    end
 
     if not SlotCache[slotId] then
         SlotCache[slotId] = {
             owner_citizenid = slot.owner_citizenid,
+            owner_name      = slot.owner_name or slot.owner_citizenid,
+            coords          = slot.coords,
             vehicle_plate   = slot.vehicle_plate,
             hasAccess       = false,
             accessPending   = false,
+            slotIndex       = SlotIndexMap[slotId],
         }
     else
         SlotCache[slotId].owner_citizenid = slot.owner_citizenid
+        SlotCache[slotId].owner_name      = slot.owner_name or slot.owner_citizenid
+        SlotCache[slotId].coords          = slot.coords
         SlotCache[slotId].vehicle_plate   = slot.vehicle_plate
+        SlotCache[slotId].slotIndex       = SlotIndexMap[slotId]
     end
-
-    local citizenid = QBCore.Functions.GetPlayerData().citizenid
 
     if slot.owner_citizenid == nil then
         SlotCache[slotId].hasAccess = false
@@ -78,140 +82,108 @@ local function SetupSlotZone(slot)
     elseif not SlotCache[slotId].hasAccess then
         ResolveAccess(slotId)
     end
-
-    if ActiveZones[slotId] then
-        exports['qb-target']:RemoveZone(ActiveZones[slotId])
-        ActiveZones[slotId] = nil
-    end
-
-    local c = slot.coords
-
-    exports['qb-target']:AddCircleZone(
-        zoneName,
-        vector3(c.x, c.y, c.z),
-        Config.TargetRadius,
-        { name = zoneName, debugPoly = Config.Debug },
-        {
-            options = {
-                {
-                    type  = 'client',
-                    event = 'qb-reservedgarage:client:tryParkVehicle',
-                    icon  = 'fas fa-parking',
-                    label = 'Park Vehicle',
-                    slotId = slotId,
-                    canInteract = function()
-                        local cached = SlotCache[slotId]
-                        if not cached or not cached.hasAccess then return false end
-                        if cached.vehicle_plate ~= nil then return false end
-                        local ped = PlayerPedId()
-                        local veh = GetVehiclePedIsIn(ped, false)
-                        if veh == 0 then return false end
-                        return GetPedInVehicleSeat(veh, -1) == ped
-                    end,
-                },
-                {
-                    type  = 'client',
-                    event = 'qb-reservedgarage:client:tryRetrieveVehicle',
-                    icon  = 'fas fa-car',
-                    label = 'Retrieve Vehicle',
-                    slotId = slotId,
-                    canInteract = function()
-                        local cached = SlotCache[slotId]
-                        if not cached or not cached.hasAccess then return false end
-                        if cached.vehicle_plate == nil then return false end
-                        return GetVehiclePedIsIn(PlayerPedId(), false) == 0
-                    end,
-                },
-            },
-            distance = Config.SlotInteractDistance,
-        }
-    )
-
-    ActiveZones[slotId] = zoneName
-    DebugPrint('Zone set up: slot ' .. slotId)
 end
 
--- ── Entity Target ─────────────────────────────
-
-local function SetupEntityTarget(slotId, netId)
-    if EntityTargets[slotId] then
-        exports['qb-target']:RemoveTargetEntity(EntityTargets[slotId])
-        EntityTargets[slotId] = nil
-    end
-
-    local entity = NetworkGetEntityFromNetworkId(netId)
-    if not DoesEntityExist(entity) then
-        DebugPrint('Entity target failed — not found for netId ' .. netId)
-        return
-    end
-
-    exports['qb-target']:AddTargetEntity(entity, {
-        options = {
-            {
-                type  = 'client',
-                event = 'qb-reservedgarage:client:tryRetrieveVehicle',
-                icon  = 'fas fa-car-side',
-                label = 'Retrieve Vehicle',
-                slotId = slotId,
-                canInteract = function()
-                    local cached = SlotCache[slotId]
-                    if not cached or not cached.hasAccess then return false end
-                    return GetVehiclePedIsIn(PlayerPedId(), false) == 0
-                end,
-            },
-            {
-                type  = 'client',
-                event = 'qb-reservedgarage:client:tryParkVehicle',
-                icon  = 'fas fa-parking',
-                label = 'Park Vehicle',
-                slotId = slotId,
-                canInteract = function()
-                    local cached = SlotCache[slotId]
-                    if not cached or not cached.hasAccess then return false end
-                    if cached.vehicle_plate ~= nil then return false end
-                    local ped = PlayerPedId()
-                    local veh = GetVehiclePedIsIn(ped, false)
-                    if veh == 0 then return false end
-                    return GetPedInVehicleSeat(veh, -1) == ped
-                end,
-            },
-        },
-        distance = Config.SlotInteractDistance,
-    })
-
-    EntityTargets[slotId] = entity
-    DebugPrint('Entity target set: slot ' .. slotId)
+local function UnregisterSlot(slotId)
+    SlotCache[slotId] = nil
 end
+
+-- ── 3D Text Drawing ───────────────────────────
+
+local function DrawText3D(x, y, z, text)
+    local onScreen, sx, sy = World3dToScreen2d(x, y, z)
+    if not onScreen then return end
+
+    local scale = 0.22  -- fixed small size, no distance scaling
+
+    SetTextScale(scale, scale)
+    SetTextFont(4)
+    SetTextProportional(true)
+    SetTextColour(255, 255, 255, 255)
+    SetTextOutline()
+    SetTextEntry('STRING')
+    SetTextCentre(true)
+    AddTextComponentString(text)
+    DrawText(sx, sy)
+end
+
+-- ── Main Draw / Interact Thread ───────────────
+
+CreateThread(function()
+    while true do
+        local sleep     = 500
+        local ped       = PlayerPedId()
+        local pedCoords = GetEntityCoords(ped)
+        local curVeh    = GetVehiclePedIsIn(ped, false)
+        local inVehicle = curVeh ~= 0
+        local isDriver  = inVehicle and GetPedInVehicleSeat(curVeh, -1) == ped
+
+        for slotId, slot in pairs(SlotCache) do
+            if not slot.hasAccess then goto continue end
+
+            local c    = slot.coords
+            local sp   = vector3(c.x, c.y, c.z)
+            local dist = #(pedCoords - sp)
+
+            if dist <= Config.MarkerDrawDistance then
+                sleep = 0  -- full tick rate when near a slot
+
+                local occupied     = slot.vehicle_plate ~= nil
+                local ownerDisplay = slot.owner_name or ('Slot #' .. (slot.slotIndex or slotId))
+                local floatZ       = c.z + 0.80
+
+                -- Line 1: Owner name
+                DrawText3D(c.x, c.y, floatZ + 0.30,
+                    '~c~[ ~w~' .. ownerDisplay .. ' ~c~]')
+
+                -- Line 2: Plate or dashes
+                if occupied then
+                    DrawText3D(c.x, c.y, floatZ + 0.08, '~y~' .. slot.vehicle_plate)
+                else
+                    DrawText3D(c.x, c.y, floatZ + 0.08, '~c~—  —  —')
+                end
+
+                -- Line 3: Status
+                if occupied then
+                    DrawText3D(c.x, c.y, floatZ - 0.14, '~o~[PARKED]')
+                else
+                    DrawText3D(c.x, c.y, floatZ - 0.14, '~g~[AVAILABLE]')
+                end
+
+                -- E key prompt + interaction
+                if dist <= Config.InteractDistance then
+                    if isDriver and not occupied then
+                        if IsControlJustReleased(0, 38) then
+                            TriggerEvent('qb-reservedgarage:client:tryParkVehicle', { slotId = slotId })
+                        end
+                    elseif not inVehicle and occupied then
+                        if IsControlJustReleased(0, 38) then
+                            TriggerEvent('qb-reservedgarage:client:tryRetrieveVehicle', { slotId = slotId })
+                        end
+                    end
+                end
+            end
+
+            ::continue::
+        end
+
+        Wait(sleep)
+    end
+end)
 
 -- ── Init ──────────────────────────────────────
 
-local function PurgeAllZones()
-    for _, zoneName in pairs(ActiveZones) do
-        exports['qb-target']:RemoveZone(zoneName)
-    end
-    for _, entity in pairs(EntityTargets) do
-        exports['qb-target']:RemoveTargetEntity(entity)
-    end
-    ActiveZones   = {}
-    EntityTargets = {}
-    DebugPrint('All zones purged (cache preserved)')
-end
-
 local function InitAllSlots(slots)
-    PurgeAllZones()
+    SlotCache        = {}
+    SlotIndexMap     = {}
+    SlotIndexCounter = 0
     for _, slot in ipairs(slots) do
-        SetupSlotZone(slot)
-        if slot.entity then
-            local sid, eid = slot.slot_id, slot.entity
-            Citizen.SetTimeout(800, function()
-                SetupEntityTarget(sid, eid)
-            end)
-        end
+        RegisterSlot(slot)
     end
+    DebugPrint('InitAllSlots — received ' .. #slots .. ' slot(s)')
 end
 
 AddEventHandler('QBCore:Client:OnPlayerLoaded', function()
-    SlotCache = {}
     QBCore.Functions.TriggerCallback('qb-reservedgarage:server:getSlots', function(slots)
         InitAllSlots(slots)
     end)
@@ -252,44 +224,35 @@ RegisterNetEvent('qb-reservedgarage:client:tryParkVehicle', function(data)
         Notify('Could not identify this vehicle model.', 'error'); return
     end
 
-    local propsJson = QBCore.Functions.GetVehicleProperties(veh)
-
-    -- Capture exact position and heading BEFORE ejecting/deleting the vehicle
+    local propsJson  = QBCore.Functions.GetVehicleProperties(veh)
     local vehCoords  = GetEntityCoords(veh)
     local vehHeading = GetEntityHeading(veh)
 
-    -- Tell server we are starting a park (disconnect guard)
     TriggerServerEvent('qb-reservedgarage:server:beginPark', plate)
 
-    -- Eject player from vehicle first
     TaskLeaveVehicle(ped, veh, 16)
     Wait(1500)
 
-    -- Take network control and delete the vehicle
     NetworkRequestControlOfEntity(veh)
     local ownerWait = 0
     while not NetworkHasControlOfEntity(veh) and ownerWait < 30 do
-        Wait(100)
-        ownerWait = ownerWait + 1
+        Wait(100); ownerWait = ownerWait + 1
     end
     SetEntityAsMissionEntity(veh, true, true)
     DeleteVehicle(veh)
 
-    -- Wait until confirmed gone
     local deleteWait = 0
     while DoesEntityExist(veh) and deleteWait < 40 do
-        Wait(100)
-        deleteWait = deleteWait + 1
+        Wait(100); deleteWait = deleteWait + 1
     end
 
-    -- Send exact parked position/heading to server alongside the normal park data
     TriggerServerEvent('qb-reservedgarage:server:parkVehicle', slotId, plate, modelName, json.encode(propsJson), {
         x = vehCoords.x,
         y = vehCoords.y,
         z = vehCoords.z,
         w = vehHeading,
     })
-    Notify('Vehicle parked! Static copy will appear shortly.', 'success')
+    Notify('Vehicle parked!', 'success')
 end)
 
 -- ── Retrieve Vehicle ──────────────────────────
@@ -299,8 +262,6 @@ RegisterNetEvent('qb-reservedgarage:client:tryRetrieveVehicle', function(data)
 end)
 
 -- ── Warp Into Retrieved Vehicle ───────────────
--- Waits for entity to exist, then waits for model to fully load before applying props
--- This ensures mods, colours, neons and extras are always restored correctly
 
 RegisterNetEvent('qb-reservedgarage:client:warpIntoVehicle', function(netId, propsJson)
     local entity  = 0
@@ -321,18 +282,12 @@ RegisterNetEvent('qb-reservedgarage:client:warpIntoVehicle', function(netId, pro
 
     if propsJson then
         local props = type(propsJson) == 'string' and json.decode(propsJson) or propsJson
-
         if props then
             local modelHash = GetEntityModel(entity)
-
-            -- Wait for model to be fully streamed in
             local waited = 0
             while not HasModelLoaded(modelHash) and waited < 50 do
-                Wait(100)
-                waited = waited + 1
+                Wait(100); waited = waited + 1
             end
-
-            -- Apply props, wait, then apply again to guarantee mods/colours/neons stick
             Wait(300)
             QBCore.Functions.SetVehicleProperties(entity, props)
             Wait(500)
@@ -347,20 +302,13 @@ end)
 -- ── Server → Client Sync ──────────────────────
 
 RegisterNetEvent('qb-reservedgarage:client:slotCreated', function(slot)
-    SetupSlotZone(slot)
+    RegisterSlot(slot)
     DebugPrint('New slot registered: #' .. slot.slot_id)
 end)
 
 RegisterNetEvent('qb-reservedgarage:client:slotRemoved', function(slotId)
-    if ActiveZones[slotId] then
-        exports['qb-target']:RemoveZone(ActiveZones[slotId])
-        ActiveZones[slotId] = nil
-    end
-    if EntityTargets[slotId] then
-        exports['qb-target']:RemoveTargetEntity(EntityTargets[slotId])
-        EntityTargets[slotId] = nil
-    end
-    SlotCache[slotId] = nil
+    UnregisterSlot(slotId)
+    DebugPrint('Slot removed: #' .. slotId)
 end)
 
 RegisterNetEvent('qb-reservedgarage:client:vehicleSpawned', function(slotId, netId, plate, propsJson)
@@ -375,29 +323,22 @@ RegisterNetEvent('qb-reservedgarage:client:vehicleSpawned', function(slotId, net
     Citizen.SetTimeout(800, function()
         local entity = NetworkGetEntityFromNetworkId(netId)
         if DoesEntityExist(entity) then
-            -- Apply props
             if propsJson then
                 local props = type(propsJson) == 'string' and json.decode(propsJson) or propsJson
                 if props then QBCore.Functions.SetVehicleProperties(entity, props) end
             end
-            -- Make static vehicle truly unenterable and frozen client-side
             SetEntityInvincible(entity, true)
             FreezeEntityPosition(entity, true)
-            SetVehicleDoorsLocked(entity, 10) -- 10 = cannot be entered by anyone
+            SetVehicleDoorsLocked(entity, 10)
             SetVehicleCanBreak(entity, false)
         end
-        SetupEntityTarget(slotId, netId)
     end)
 end)
 
 RegisterNetEvent('qb-reservedgarage:client:vehicleDespawned', function(slotId)
-    if EntityTargets[slotId] then
-        exports['qb-target']:RemoveTargetEntity(EntityTargets[slotId])
-        EntityTargets[slotId] = nil
-    end
+    DebugPrint('Vehicle despawned for slot ' .. slotId)
 end)
 
--- Force delete a frozen/static entity that server delete may not have cleaned up
 RegisterNetEvent('qb-reservedgarage:client:forceDeleteEntity', function(netId)
     local entity = NetworkGetEntityFromNetworkId(netId)
     if DoesEntityExist(entity) then
@@ -412,10 +353,6 @@ end)
 RegisterNetEvent('qb-reservedgarage:client:slotCleared', function(slotId)
     if SlotCache[slotId] then
         SlotCache[slotId].vehicle_plate = nil
-    end
-    if EntityTargets[slotId] then
-        exports['qb-target']:RemoveTargetEntity(EntityTargets[slotId])
-        EntityTargets[slotId] = nil
     end
 end)
 

@@ -3,7 +3,7 @@ game 'gta5'
 
 author      'qb-reservedgarage'
 description 'VIP Persistent Parking Slot System — QBCore'
-version     '2.0.0'
+version     '3.0.0'
 
 lua54 'yes'
 
@@ -24,5 +24,4 @@ client_scripts {
 dependencies {
     'qb-core',
     'oxmysql',
-    'qb-target',
 }

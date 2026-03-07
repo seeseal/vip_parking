@@ -11,12 +11,11 @@ Config.StreamInterval = 5000
 -- Keep this at 5000 or above to avoid unnecessary load
 Config.DespawnInterval = 5000
 
--- The radius (in game units) around the slot coords that qb-target uses for the
--- interactive zone (park / retrieve prompt). This controls the clickable area.
-Config.TargetRadius = 2.5
+-- Distance (in game units) at which the floating 3D slot marker becomes visible
+Config.MarkerDrawDistance = 10.0
 
--- Max distance (in game units) at which the Park / Retrieve prompt is visible
-Config.SlotInteractDistance = 5.0
+-- Distance (in game units) at which the E key Park / Retrieve prompt appears
+Config.InteractDistance = 1.5
 
 -- Maximum number of VIP slots one player can own
 -- Admins can run /createslot multiple times for the same player up to this cap
@@ -34,5 +33,5 @@ Config.AdminGroup = 'admin'
 -- Options: 'qb' (QBCore default), 'ox' (ox_lib)
 Config.NotifyStyle = 'qb'
 
--- Debug prints in server console (set false in production)
+-- Debug prints in server console and F8 client console (set false in production)
 Config.Debug = false

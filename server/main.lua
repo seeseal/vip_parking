@@ -122,6 +122,25 @@ end
 
 -- ── Load Slots ────────────────────────────────
 
+-- OwnerNameCache: citizenid → "Firstname Lastname"
+local OwnerNameCache = {}
+
+local function GetOwnerName(citizenid)
+    if OwnerNameCache[citizenid] then return OwnerNameCache[citizenid] end
+    local rows = MySQL.query.await(
+        "SELECT JSON_UNQUOTE(JSON_EXTRACT(charinfo, '$.firstname')) AS firstname, " ..
+        "JSON_UNQUOTE(JSON_EXTRACT(charinfo, '$.lastname')) AS lastname " ..
+        "FROM players WHERE citizenid = ? LIMIT 1",
+        { citizenid }
+    )
+    local row  = rows and rows[1]
+    local name = (row and row.firstname and row.lastname)
+        and (row.firstname .. ' ' .. row.lastname)
+        or citizenid
+    OwnerNameCache[citizenid] = name
+    return name
+end
+
 local function LoadSlots()
     local rows = MySQL.query.await('SELECT * FROM vip_parking_slots')
     for _, row in ipairs(rows) do
@@ -129,11 +148,12 @@ local function LoadSlots()
         Slots[row.slot_id] = {
             slot_id          = row.slot_id,
             owner_citizenid  = row.owner_citizenid,
+            owner_name       = GetOwnerName(row.owner_citizenid),
             coords           = coords,
             vehicle_plate    = row.vehicle_plate,
             vehicle_model    = row.vehicle_model,
             vehicle_props    = row.vehicle_props and json.decode(row.vehicle_props) or nil,
-            parked_coords    = row.parked_coords and json.decode(row.parked_coords) or nil,  -- restore saved position
+            parked_coords    = row.parked_coords and json.decode(row.parked_coords) or nil,
             entity           = nil,
         }
     end
@@ -294,6 +314,7 @@ QBCore.Commands.Add('createslot', 'Create a VIP parking slot at your position (A
     Slots[slotId] = {
         slot_id         = slotId,
         owner_citizenid = citizenid,
+        owner_name      = GetOwnerName(citizenid),
         coords          = coords,
         vehicle_plate   = nil,
         vehicle_model   = nil,
@@ -432,6 +453,7 @@ QBCore.Functions.CreateCallback('qb-reservedgarage:server:getSlots', function(sr
         result[#result + 1] = {
             slot_id         = slot.slot_id,
             owner_citizenid = slot.owner_citizenid,
+            owner_name      = slot.owner_name or slot.owner_citizenid,
             coords          = slot.coords,
             vehicle_plate   = slot.vehicle_plate,
             entity          = slot.entity,
